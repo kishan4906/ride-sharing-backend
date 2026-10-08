@@ -1,0 +1,85 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ride_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ride_user
+      POSTGRES_PASSWORD: ride_pass
+      POSTGRES_DB: ride_sharing
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ride_user -d ride_sharing"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: ride_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ride_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      DATABASE_URL: "postgresql://ride_user:ride_pass@postgres:5432/ride_sharing?schema=public"
+      REDIS_URL: "redis://redis:6379"
+      JWT_SECRET: "dev_only_change_me_in_production_please"
+      JWT_EXPIRES_IN: "7d"
+    ports:
+      - "4000:4000"
+    command: sh -c "npx prisma migrate deploy && npm run seed && npm run dev"
+    volumes:
+      - ./src:/app/src
+      - ./prisma:/app/prisma
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ride_worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
+        condition: service_started
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: "postgresql://ride_user:ride_pass@postgres:5432/ride_sharing?schema=public"
+      REDIS_URL: "redis://redis:6379"
+    command: sh -c "npm run worker"
+    volumes:
+      - ./src:/app/src
+      - ./prisma:/app/prisma
+
+volumes:
+  postgres_data:
+  redis_data:
